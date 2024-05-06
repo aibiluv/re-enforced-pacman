@@ -6,7 +6,7 @@ from entity import Entity
 from sprites import PacmanSprites
 
 class Pacman(Entity):
-    def __init__(self, node):
+    def __init__(self, node, inputHandler = None):
         Entity.__init__(self, node )
         self.name = PACMAN    
         self.color = YELLOW
@@ -14,6 +14,7 @@ class Pacman(Entity):
         self.setBetweenNodes(LEFT)
         self.alive = True
         self.sprites = PacmanSprites(self)
+        self.inputHandler = inputHandler
 
     def reset(self):
         Entity.reset(self)
@@ -53,15 +54,25 @@ class Pacman(Entity):
                 self.reverseDirection()
 
     def getValidKey(self):
-        key_pressed = pygame.key.get_pressed()
-        if key_pressed[K_UP]:
-            return UP
-        if key_pressed[K_DOWN]:
-            return DOWN
-        if key_pressed[K_LEFT]:
-            return LEFT
-        if key_pressed[K_RIGHT]:
-            return RIGHT
+        if self.inputHandler:
+            if self.inputHandler.get_key(K_UP):
+                return UP
+            if self.inputHandler.get_key(K_DOWN):
+                return DOWN
+            if self.inputHandler.get_key(K_LEFT):
+                return LEFT
+            if self.inputHandler.get_key(K_RIGHT):
+                return RIGHT                  
+        else:
+            key_pressed = pygame.key.get_pressed()
+            if key_pressed[K_UP]:
+                return UP
+            if key_pressed[K_DOWN]:
+                return DOWN
+            if key_pressed[K_LEFT]:
+                return LEFT
+            if key_pressed[K_RIGHT]:
+                return RIGHT
         return STOP  
 
     def eatPellets(self, pelletList):
