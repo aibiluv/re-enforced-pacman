@@ -1,8 +1,9 @@
+import os
 import random
 import threading
 import time
 import numpy as np
-from ml.train import create_model, train_step, key_mapping, train_step_batch
+from ml.train import create_model, train_conv_step, train_conv_step_batch, train_step, key_mapping, train_step_batch
 import pygame
 from pygame.locals import *
 from constants import *
@@ -23,16 +24,12 @@ from pynput.keyboard import Controller
 keyboard = Controller()
 
 def run_training(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones):
-    train_step_batch(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones)
+    train_conv_step_batch(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones)
 
-
+games_played = 0
 class GameController(object):
     def __init__(self):
         pygame.init()
-        self.matrixes_buffer = []  # Buffer to accumulate matrices
-        self.buffer_size = 1000  # Number of matrices to accumulate before writing to file
-        self.file_path = "states.txt"
-        self.clear_file()
         self.screen = pygame.display.set_mode(SCREENSIZE, 0, 32)
         self.background = None
         self.background_norm = None
@@ -51,14 +48,23 @@ class GameController(object):
         self.fruitCaptured = []
         self.fruitNode = None
         self.mazedata = MazeData()
+
         
 
     def setup_ml_params(self):
+        self.matrixes_buffer = []  # Buffer to accumulate matrices
+        self.buffer_size = 1000  # Number of matrices to accumulate before writing to file
+        self.save_directory = "channel_files"
+        self.ensure_directory_exists()
+        self.last_save_time = time.time()  # Initialize the last save time
+        self.save_interval = 5  # seconds between saves
         self.ai = True
         self.train = True
+        self.run_once = True
+        self.defaultGrid = np.zeros((NROWS, NCOLS))  # Initialize matrix with zeros
         if self.ai:
             if (self.train):
-                self.model = create_model(model_name='pac_man_human_trainer', create_new=False)
+                self.model = create_model(model_name='pac_man_human_trainer', create_new=True, input_size=(NROWS-5, NCOLS,7))
             else:
                 self.model = models.load_model('pac_man_human_trainer')
         
@@ -105,7 +111,7 @@ class GameController(object):
         self.ghosts.inky.startNode.denyAccess(RIGHT, self.ghosts.inky)
         self.ghosts.clyde.startNode.denyAccess(LEFT, self.ghosts.clyde)
         self.mazedata.obj.denyGhostsAccess(self.ghosts, self.nodes)
-        self.run_once = True
+        
         self.setup_ml_params()
 
     def startGame_old(self):      
@@ -148,39 +154,53 @@ class GameController(object):
             
             matrix[grid_y, grid_x] = value  # Set value at specified position to 1
 
-    def write_state_to_file(self):
-        with open(self.file_path, 'a') as file:
-            file.write(f"{self.getState()}")
-            file.write("\n")
+    def get_state_for_conv(self):
+        # Initialize channels for each game element
+        wall_channel = (self.defaultGrid == -1).astype(int)
+        space_channel = (self.defaultGrid == 0).astype(int)
+        pellet_channel = np.zeros_like(self.defaultGrid)
+        big_pellet_channel = np.zeros_like(self.defaultGrid)
+        ghost_channel = np.zeros_like(self.defaultGrid)
+        frightened_ghost_channel = np.zeros_like(self.defaultGrid)
+        pacman_channel = np.zeros_like(self.defaultGrid)  # Pac-Man channel
+        # Set Pac-Man's position in his channel
+        pacman_x, pacman_y = int(self.pacman.position.x / TILEWIDTH), int(self.pacman.position.y / TILEHEIGHT)
+        pacman_channel[pacman_y, pacman_x] = 1
+        # Update channels based on game elements
+        for pellet in self.pellets.pelletList:
+            x, y = int(pellet.position.x / TILEWIDTH), int(pellet.position.y / TILEHEIGHT)
+            if pellet.name == POWERPELLET:
+                big_pellet_channel[y, x] = 1
+            else:
+                pellet_channel[y, x] = 1
 
-    def write_buffer_to_file(self):
-        with open(self.file_path, 'a') as file:
-                np.savetxt(file, self.matrixes_buffer, fmt='%d')
-                file.write("\n")
-        self.matrixes_buffer = []  # Clear buffer after writing to file
+        for ghost in self.ghosts:
+            x, y = int(ghost.position.x / TILEWIDTH), int(ghost.position.y / TILEHEIGHT)
+            if ghost.mode.current == FREIGHT:
+                frightened_ghost_channel[y, x] = 1
+            else:
+                ghost_channel[y, x] = 1
 
-    def clear_file(self):
-        open(self.file_path, 'w').close()
+        # Combine all channels into a single multi-channel array
+        matrix = np.stack([wall_channel[3:-2], space_channel[3:-2], pellet_channel[3:-2], big_pellet_channel[3:-2], ghost_channel[3:-2], frightened_ghost_channel[3:-2], pacman_channel[3:-2]], axis=-1)
+        return matrix        
+    
+    
+    
+    def ensure_directory_exists(self):
+        """ Ensure the directory for saving channel files exists """
+        if not os.path.exists(self.save_directory):
+            os.makedirs(self.save_directory)
 
-    def getState(self):
-        matrix = self.defaultGrid.copy()
-        self.generate_matrix_with_position(matrix, [pellet.position for pellet in self.pellets.pelletList if pellet.name==POWERPELLET],2)
-        self.generate_matrix_with_position(matrix, [pellet.position for pellet in self.pellets.pelletList if pellet.name!=POWERPELLET ],1)
-        self.generate_matrix_with_position(matrix, self.ghosts.getPositions(),3)
+    def save_channels(self, matrix):
+        channels = ['wall', 'space', 'pellet', 'big_pellet', 'ghost', 'frightened_ghost', 'pacman']
+        for i, channel_name in enumerate(channels):
+            filename = os.path.join(self.save_directory, f"{channel_name}.txt")
+            # Open the file in append mode, or create it if it does not exist
+            with open(filename, 'ab') as f:
+                np.savetxt(f, matrix[:, :, i], fmt="%d")
 
-        matrix_flattened = np.ravel([matrix[3:-2]])
-
-        # Collecting Pac-Man position and the boolean for pellets
-        pacman_position = np.array([int(self.pacman.position.x/TILEWIDTH), int(self.pacman.position.y/TILEHEIGHT)])
-        done = np.array([self.pellets.isEmpty() or not self.pacman.alive])
-
-        # Creating an array for ghost modes
-        ghost_modes = np.array([g.mode.current == FREIGHT for g in self.ghosts])
-
-        # Concatenating all parts into a single one-dimensional array
-        state_array = np.concatenate((matrix_flattened, pacman_position, ghost_modes))
-
-        return state_array, done
+ 
     def release_all_keys(self):
         """Release all keys in the key_mapping that are not None."""
         for key_info in key_mapping.values():
@@ -194,7 +214,7 @@ class GameController(object):
             random_key = random.choice(keys)
             action_key = key_mapping[random_key]
         else:
-            action_space = self.model.predict(np.array(state).reshape(1, len(state)))
+            action_space = self.model.predict(np.array(state).reshape(1, *state.shape))
             active_index = np.argmax(action_space)
             action_key = key_mapping[active_index]
         
@@ -214,7 +234,9 @@ class GameController(object):
     def update(self):
         
         dt = self.clock.tick(20) / 1000.0
-        current_state, done = self.getState()
+        done = np.array([self.pellets.isEmpty() or not self.pacman.alive])
+
+        current_state = self.get_state_for_conv()
         self.textgroup.update(dt)
         self.pellets.update(dt)
         if not self.pause.paused:
@@ -227,7 +249,11 @@ class GameController(object):
         if self.pacman.alive:
             if not self.pause.paused:
                 self.pacman.update(dt, self.updateScore) 
-                next_state, done = self.getState()
+                next_state = self.get_state_for_conv()
+                if time.time() - self.last_save_time > self.save_interval:
+                    print("writing to file")
+                    #self.save_channels(self.get_state_for_conv())
+                    self.last_save_time = time.time()  # Reset the timer
                 if (self.ai):
                     action = pygame.key.get_pressed()  # Assuming this captures the action correctly
                     reward = self.score  # Use an appropriate method to calculate reward if needed
@@ -258,16 +284,15 @@ class GameController(object):
                         training_thread = threading.Thread(target=run_training, args=(self.model, thread_batch_states, thread_batch_next_states, thread_batch_actions, thread_batch_rewards, thread_batch_dones))
                         training_thread.start()
 
-                            # Clear the batch data
-                    
+
                     self.ai_action(next_state)
                     
 
         else:
             self.pacman.update(dt)
-            next_state, done = self.getState()
-            if(self.run_once):
-                train_step(self.model,current_state, next_state,pygame.key.get_pressed(), self.score, done)
+            next_state = self.get_state_for_conv()
+            if(self.run_once and self.ai):
+                train_conv_step(self.model,current_state, next_state,pygame.key.get_pressed(), self.score, done)
                 self.run_once = False
             
         
@@ -292,7 +317,8 @@ class GameController(object):
                 print("Qutting")
                 if self.train:
                     #flushing batch
-                    run_training(self.model, self.batch_states, self.batch_next_states, self.batch_actions, self.batch_rewards, self.batch_dones)
+                    if(len(self.batch_states)>0):
+                        run_training(self.model, self.batch_states, self.batch_next_states, self.batch_actions, self.batch_rewards, self.batch_dones)
                     self.save_model()
                 exit()
             elif event.type == KEYDOWN:
@@ -330,6 +356,19 @@ class GameController(object):
         # Press and release the spacebar
         pyautogui.press('space')
 
+    def saveScore(self):
+        global games_played
+        filename = "game_scores.txt"
+        
+        # Check if the file exists and append if it does
+        mode = 'a' if os.path.exists(filename) else 'w'
+        
+        with open(filename, mode) as file:
+            file.write(f"Game {games_played + 1}: Score = {self.score}\n")
+        
+        # Increment the games_played counter
+        games_played += 1
+        print(f"Score saved. Total games played: {games_played}")
     def checkGhostEvents(self):
         for ghost in self.ghosts:
             if self.pacman.collideGhost(ghost):
@@ -344,21 +383,22 @@ class GameController(object):
                     self.nodes.allowHomeAccess(ghost)
                 elif ghost.mode.current is not SPAWN:
                     if self.pacman.alive:
-                        # self.lives -=  1 unlimitted life for now
-                        self.updateScore(-10)
+                        self.lives -=  1
+                        self.updateScore(-100)
+                        
                         self.lifesprites.removeImage()
                         self.pacman.die()               
                         self.ghosts.hide()
                         if self.lives <= 0:
                             self.textgroup.showText(GAMEOVERTXT)
-                            self.pause.setPause(pauseTime=3, func=self.restartGame)
+                            self.pause.setPause(pauseTime=0, func=self.restartGame)
+                            thread = threading.Thread(target=self.press_space_delayed)
+                            thread.start()        
+                            self.saveScore()                    
                         else:
                             self.pause.setPause(pauseTime=0, func=self.resetLevel)
                             thread = threading.Thread(target=self.press_space_delayed)
                             thread.start()
-
-                            thread1 = threading.Thread(target=self.write_state_to_file)
-                            thread1.start()
 
                             
     
