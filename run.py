@@ -3,6 +3,7 @@ import random
 import threading
 import time
 import numpy as np
+from input_handler import InputHandler
 from ml.train import create_model, train_conv_step, train_conv_step_batch, train_step, key_mapping, train_step_batch
 import pygame
 from pygame.locals import *
@@ -63,11 +64,11 @@ class GameController(object):
         self.run_once = True
         self.defaultGrid = np.zeros((NROWS, NCOLS))  # Initialize matrix with zeros
         if self.ai:
-            if (self.train):
+            if (self.train):        
                 self.model = create_model(model_name='pac_man_human_trainer', create_new=True, input_size=(NROWS-5, NCOLS,7))
             else:
                 self.model = models.load_model('pac_man_human_trainer')
-        
+          
         self.defaultGrid = np.zeros((NROWS, NCOLS))  # Initialize matrix with zeros
         self.generate_matrix_with_position(self.defaultGrid, self.mazesprites.wall_vector ,-1)
         self.batch_states = []
@@ -96,7 +97,8 @@ class GameController(object):
         self.nodes = NodeGroup(self.mazedata.obj.name+".txt")
         self.mazedata.obj.setPortalPairs(self.nodes)
         self.mazedata.obj.connectHomeNodes(self.nodes)
-        self.pacman = Pacman(self.nodes.getNodeFromTiles(*self.mazedata.obj.pacmanStart))
+        self.inputHandler = InputHandler()
+        self.pacman = Pacman(self.nodes.getNodeFromTiles(*self.mazedata.obj.pacmanStart), self.inputHandler)
         self.pellets = PelletGroup(self.mazedata.obj.name+".txt")
         self.ghosts = GhostGroup(self.nodes.getStartTempNode(), self.pacman)
 
@@ -219,18 +221,23 @@ class GameController(object):
             action_key = key_mapping[active_index]
         
         self.release_all_keys()
-        if action_key is not None:
-        # Create a KEYDOWN event for the corresponding key
-            # key_event = pygame.event.Event(pygame.KEYDOWN, {'key':key_mapping[active_index][0]})
-            # print(f"key event: {key_event}")
-            # pygame.event.post(key_event)
-            #pyautogui.press(key_mapping[active_index][1])
-            keyboard.press(action_key[2])
+        if action_key is not None: 
+            
+            self.inputHandler.update_simulated_input(action_key[0])
+            
         else:
             # DO_NOTHING or handle it accordingly
             print("No action required")
     
-    
+    def update_training_params(self, current_state, next_state, done):
+        action = self.inputHandler.get_pressed()  # Assuming this captures the action correctly
+        reward = self.score  # Use an appropriate method to calculate reward if needed
+
+        self.batch_states.append(current_state)
+        self.batch_next_states.append(next_state)
+        self.batch_actions.append(action)
+        self.batch_rewards.append(reward)
+        self.batch_dones.append(done)
     def update(self):
         
         dt = self.clock.tick(20) / 1000.0
@@ -252,17 +259,10 @@ class GameController(object):
                 next_state = self.get_state_for_conv()
                 if time.time() - self.last_save_time > self.save_interval:
                     print("writing to file")
-                    #self.save_channels(self.get_state_for_conv())
+                    self.save_channels(self.get_state_for_conv())
                     self.last_save_time = time.time()  # Reset the timer
                 if (self.ai):
-                    action = pygame.key.get_pressed()  # Assuming this captures the action correctly
-                    reward = self.score  # Use an appropriate method to calculate reward if needed
-
-                    self.batch_states.append(current_state)
-                    self.batch_next_states.append(next_state)
-                    self.batch_actions.append(action)
-                    self.batch_rewards.append(reward)
-                    self.batch_dones.append(done)
+                    self.update_training_params(current_state, next_state, done)
                     if len(self.batch_states) >= self.batch_size:
                         #train_step(self.model,current_state, next_state,pygame.key.get_pressed(), self.score, done)
                         #train_step_batch(self.model, self.batch_states, self.batch_next_states,
@@ -292,7 +292,7 @@ class GameController(object):
             self.pacman.update(dt)
             next_state = self.get_state_for_conv()
             if(self.run_once and self.ai):
-                train_conv_step(self.model,current_state, next_state,pygame.key.get_pressed(), self.score, done)
+                self.update_training_params(current_state, next_state, done)
                 self.run_once = False
             
         
@@ -350,14 +350,15 @@ class GameController(object):
                 self.flashBG = True
                 self.hideEntities()
                 self.pause.setPause(pauseTime=3, func=self.nextLevel)
-    def press_space_delayed(self):
+    def press_button_delayed(self, key, delay):
         # Wait for 2 seconds
-        time.sleep(2)
+        time.sleep(delay)
         # Press and release the spacebar
-        pyautogui.press('space')
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key = key))
+        
 
     def saveScore(self):
-        global games_played
+        global games_played 
         filename = "game_scores.txt"
         
         # Check if the file exists and append if it does
@@ -392,12 +393,12 @@ class GameController(object):
                         if self.lives <= 0:
                             self.textgroup.showText(GAMEOVERTXT)
                             self.pause.setPause(pauseTime=0, func=self.restartGame)
-                            thread = threading.Thread(target=self.press_space_delayed)
+                            thread = threading.Thread(target=self.press_button_delayed, args=(pygame.K_SPACE, 2))
                             thread.start()        
                             self.saveScore()                    
                         else:
                             self.pause.setPause(pauseTime=0, func=self.resetLevel)
-                            thread = threading.Thread(target=self.press_space_delayed)
+                            thread = threading.Thread(target=self.press_button_delayed, args=(pygame.K_SPACE, 2))
                             thread.start()
 
                             
