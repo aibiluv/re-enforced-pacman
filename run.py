@@ -4,6 +4,7 @@ import threading
 import time
 import numpy as np
 from input_handler import InputHandler
+from ml.replay_buffer import ReplayBuffer
 from ml.train import create_model, train_conv_step, train_conv_step_batch, train_step, key_mapping, train_step_batch
 import pygame
 from pygame.locals import *
@@ -77,6 +78,7 @@ class GameController(object):
         self.batch_rewards = []
         self.batch_dones = []
         self.batch_size = 500 
+        self.replay_buffer = ReplayBuffer(1000)
 
     def save_model(self):
         self.model.save(self.model.name, overwrite=True)
@@ -273,6 +275,7 @@ class GameController(object):
                         thread_batch_actions = list(self.batch_actions)
                         thread_batch_rewards = list(self.batch_rewards)
                         thread_batch_dones = list(self.batch_dones)
+                        self.replay_buffer.push(self.batch_states[:], self.batch_actions[:], self.batch_rewards[:], self.batch_next_states[:], self.batch_dones[:])
 
                         self.batch_states = []
                         self.batch_next_states = []
@@ -283,7 +286,10 @@ class GameController(object):
                             # Clear the main batch    
                         training_thread = threading.Thread(target=run_training, args=(self.model, thread_batch_states, thread_batch_next_states, thread_batch_actions, thread_batch_rewards, thread_batch_dones))
                         training_thread.start()
-
+                        
+                        sampled_batch = self.replay_buffer.sample()
+                        training_thread = threading.Thread(target=run_training, args=(self.model, *sampled_batch))
+                        training_thread.start()
 
                     self.ai_action(next_state)
                     
