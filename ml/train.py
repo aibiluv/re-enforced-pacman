@@ -26,6 +26,7 @@ def create_model(model_name='pacman', create_new=True, input_size = None):
             tf_keras.layers.Flatten(),
             # Dense layer for further processing
             tf_keras.layers.Dense(128, activation='relu'),
+            tf_keras.layers.Dense(64, activation='relu'),
             # Output layer: one output for each possible action
             tf_keras.layers.Dense(5)
         ],
@@ -143,6 +144,7 @@ def train_step_batch(model, states, next_states, actions, rewards, dones):
     return loss.numpy()
 
 def train_conv_step_batch(model, states, next_states, actions, rewards, dones):
+    
     one_hot_actions = np.array([get_one_hot_encoding(action) for action in actions])
 
     # Ensure the states are properly shaped as needed by the CNN

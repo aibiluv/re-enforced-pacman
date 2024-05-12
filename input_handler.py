@@ -10,7 +10,6 @@ class InputHandler:
 
     def update_simulated_input(self, key):
         """ Update the state of simulated inputs """
-        print (f"Key pressed: {self.simulated_keys[key]}")
         for k in self.simulated_keys:
             self.simulated_keys[k] = (k == key)
 

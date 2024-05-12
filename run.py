@@ -21,12 +21,14 @@ from sprites import MazeSprites
 from mazedata import MazeData
 from vector import Vector2
 import tf_keras.models as models
-import pyautogui
 from pynput.keyboard import Controller
 keyboard = Controller()
+# Create a lock object
+lock = threading.Lock()
 
 def run_training(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones):
-    train_conv_step_batch(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones)
+    with lock:
+        train_conv_step_batch(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones)
 
 games_played = 0
 class GameController(object):
@@ -66,7 +68,7 @@ class GameController(object):
         self.defaultGrid = np.zeros((NROWS, NCOLS))  # Initialize matrix with zeros
         if self.ai:
             if (self.train):        
-                self.model = create_model(model_name='pac_man_human_trainer', create_new=True, input_size=(NROWS-5, NCOLS,7))
+                self.model = create_model(model_name='pac_man_human_trainer', create_new=False, input_size=(NROWS-5, NCOLS,7))
             else:
                 self.model = models.load_model('pac_man_human_trainer')
           
@@ -77,7 +79,7 @@ class GameController(object):
         self.batch_actions = []
         self.batch_rewards = []
         self.batch_dones = []
-        self.batch_size = 500 
+        self.batch_size = 1000 
         self.replay_buffer = ReplayBuffer(1000)
 
     def save_model(self):
@@ -233,6 +235,7 @@ class GameController(object):
     
     def update_training_params(self, current_state, next_state, done):
         action = self.inputHandler.get_pressed()  # Assuming this captures the action correctly
+        
         reward = self.score  # Use an appropriate method to calculate reward if needed
 
         self.batch_states.append(current_state)
@@ -240,6 +243,19 @@ class GameController(object):
         self.batch_actions.append(action)
         self.batch_rewards.append(reward)
         self.batch_dones.append(done)
+
+    def combine_batches(self, batch1, batch2):
+        states1, next_states1, actions1, rewards1, dones1 = batch1
+        states2, next_states2, actions2, rewards2, dones2 = batch2
+        
+        combined_states = states1 + states2
+        combined_next_states = next_states1 + next_states2
+        combined_actions = actions1 + actions2
+        combined_rewards = rewards1 + rewards2
+        combined_dones = dones1 + dones2
+        
+        return (combined_states, combined_next_states, combined_actions, combined_rewards, combined_dones)
+
     def update(self):
         
         dt = self.clock.tick(20) / 1000.0
@@ -266,17 +282,14 @@ class GameController(object):
                 if (self.ai):
                     self.update_training_params(current_state, next_state, done)
                     if len(self.batch_states) >= self.batch_size:
-                        #train_step(self.model,current_state, next_state,pygame.key.get_pressed(), self.score, done)
-                        #train_step_batch(self.model, self.batch_states, self.batch_next_states,
-                         #self.batch_actions, self.batch_rewards, self.batch_dones)
-                             # Start the training thread
+
                         thread_batch_states = list(self.batch_states)
                         thread_batch_next_states = list(self.batch_next_states)
                         thread_batch_actions = list(self.batch_actions)
                         thread_batch_rewards = list(self.batch_rewards)
                         thread_batch_dones = list(self.batch_dones)
-                        self.replay_buffer.push(self.batch_states[:], self.batch_actions[:], self.batch_rewards[:], self.batch_next_states[:], self.batch_dones[:])
-
+                        self.replay_buffer.push(list(self.batch_states),list(self.batch_next_states), list(self.batch_actions), list(self.batch_rewards), list(self.batch_dones))
+                        
                         self.batch_states = []
                         self.batch_next_states = []
                         self.batch_actions = []
@@ -288,6 +301,7 @@ class GameController(object):
                         training_thread.start()
                         
                         sampled_batch = self.replay_buffer.sample()
+                        
                         training_thread = threading.Thread(target=run_training, args=(self.model, *sampled_batch))
                         training_thread.start()
 
