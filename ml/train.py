@@ -1,11 +1,20 @@
 import random
 import numpy as np
 import tensorflow as tf
-from tf_keras.models import Sequential
+import tensorflow.keras as tf_keras
 import tf_keras.models as models
-import tf_keras
 import pygame
 from pynput.keyboard import Key
+import gc
+
+# Ensure TensorFlow eager execution
+tf.config.run_functions_eagerly(True)
+
+# Configure TensorFlow to limit thread usage
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
+
+# Key mapping
 key_mapping = {
     0: (pygame.K_UP, "up", Key.up),
     1: (pygame.K_DOWN, "down", Key.down),
@@ -13,8 +22,13 @@ key_mapping = {
     3: (pygame.K_RIGHT, "right", Key.right),
     4: None  # Representing DO_NOTHING
 }
-def create_model(model_name='pacman', create_new=True, input_size = None):
+
+def create_model(model_name='pacman', create_new=True, input_size=None):
     if create_new:
+        # Clear previous Keras session to free up memory
+        from tensorflow.keras import backend as K
+        K.clear_session()
+
         model = models.Sequential([
             # Add the first convolutional layer
             tf_keras.layers.Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=input_size),  # Adjust input_shape to match your state dimensions
@@ -55,7 +69,7 @@ def get_one_hot_encoding(action):
     return one_hot_encoded
 
 def train_conv_step_batch(model, states, next_states, actions, rewards, dones):
-    print (f'Starting batch training of length {len(states)}')
+    print(f'Starting batch training of length {len(states)}')
     one_hot_actions = np.array([get_one_hot_encoding(action) for action in actions])
 
     # Ensure the states are properly shaped as needed by the CNN
@@ -87,4 +101,8 @@ def train_conv_step_batch(model, states, next_states, actions, rewards, dones):
     # Compute gradients and apply them to update the model
     grads = tape.gradient(loss, model.trainable_variables)
     model.optimizer.apply_gradients(zip(grads, model.trainable_variables))
+    
+    # Manually invoke garbage collection
+    gc.collect()
+    
     return loss.numpy()
