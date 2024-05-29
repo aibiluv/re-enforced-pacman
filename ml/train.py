@@ -22,8 +22,11 @@ def create_model(model_name='pacman', create_new=True, input_size = None):
             # Add another convolutional layer
             tf_keras.layers.Conv2D(64, (3, 3), activation='relu'),
             tf_keras.layers.MaxPooling2D(pool_size=(2, 2)),
+            tf_keras.layers.Conv2D(128, (3, 3), activation='relu'),  # Adding an extra conv layer
+            tf_keras.layers.MaxPooling2D(pool_size=(2, 2)),
             # Flatten the output of the conv layers to feed into the dense layer
             tf_keras.layers.Flatten(),
+            tf_keras.layers.Dense(256, activation='relu'),
             # Dense layer for further processing
             tf_keras.layers.Dense(128, activation='relu'),
             tf_keras.layers.Dense(64, activation='relu'),
@@ -51,100 +54,8 @@ def get_one_hot_encoding(action):
     one_hot_encoded.append(do_nothing)
     return one_hot_encoded
 
-def train_step(model, states, next_states, action,reward, done):
-    # One-hot encode the four direction keys: [UP, DOWN, LEFT, RIGHT]
-    
-    one_hot_encoded = get_one_hot_encoding(action)
-    print (f"reward: {reward}, done: {done}, action: {one_hot_encoded}")
-    current_q_values = model(np.array(states).reshape(1, len(states)))
-    next_q_values = model.predict(np.array(next_states).reshape(1, len(next_states)))
-    max_next_q = np.max(next_q_values[0])
-    target_q_value = reward
-    if not done:
-        target_q_value += 0.95 * max_next_q
-    
-    target_q_values = np.copy(current_q_values[0])
-    target_q_values[one_hot_encoded.index(1)] = target_q_value
-    
-    with tf.GradientTape() as tape:
-              # Re-predict the Q-values to attach them to the gradient tape
-        predicted_q_values = model(np.array(states).reshape(1, len(states)), training=True)
-        # Calculate loss
-        mse = tf.keras.losses.MeanSquaredError()
-
-        # Calculate the loss
-        loss = mse(target_q_values, predicted_q_values[0])
-
-    # Calculate gradients and update model weights
-    grads = tape.gradient(loss, model.trainable_variables)
-    model.optimizer.apply_gradients(zip(grads, model.trainable_variables))
-    return loss.numpy()
-def train_conv_step(model, states, next_states, action, reward, done):
-    # One-hot encode the action
-    one_hot_encoded = get_one_hot_encoding(action)
-    print(f"reward: {reward}, done: {done}, action: {one_hot_encoded}")
-
-    # Ensure the states are properly shaped for a single observation
-    states = np.array(states).reshape(1, *states.shape)  # Adjust the shape based on your state shape, e.g., (1, 20, 20, 7)
-    next_states = np.array(next_states).reshape(1, *next_states.shape)
-
-    current_q_values = model.predict(states)
-    next_q_values = model.predict(next_states)
-    
-    max_next_q = np.max(next_q_values[0])
-    target_q_value = reward
-    if not done:
-        target_q_value += 0.95 * max_next_q
-    
-    # Get the index of the action that was taken
-    action_index = np.argmax(one_hot_encoded)
-    target_q_values = np.copy(current_q_values[0])
-    target_q_values[action_index] = target_q_value
-    
-    with tf.GradientTape() as tape:
-        tape.watch(model.trainable_variables)
-        # Re-predict the Q-values to attach them to the gradient tape for this batch
-        predicted_q_values = model(states, training=True)
-
-        # Calculate loss
-        mse = tf.keras.losses.MeanSquaredError()
-        loss = mse(np.array([target_q_values]), predicted_q_values)
-
-    # Calculate gradients and update model weights
-    grads = tape.gradient(loss, model.trainable_variables)
-    model.optimizer.apply_gradients(zip(grads, model.trainable_variables))
-
-    return loss.numpy()
-def train_step_batch(model, states, next_states, actions, rewards, dones):
-    one_hot_actions = np.array([get_one_hot_encoding(action) for action in actions])
-
-    current_q_values = model.predict(np.array(states))
-    next_q_values = model.predict(np.array(next_states))
-    
-    max_next_qs = np.max(next_q_values, axis=1)
-    not_dones = 1 - np.array(dones).flatten()
-    target_q_values = np.array(rewards )+ 0.95 * max_next_qs * not_dones
-    targets = current_q_values.copy()
-    
-    for i, action in enumerate(one_hot_actions):
-        
-        action_index = np.argmax(action)
-        if action_index >= targets.shape[1]:  # Safety check
-            print(f"Index out of bounds: {action_index} for targets shape {targets.shape[1]}")
-            continue
-        targets[i, action_index] = target_q_values[i]
-
-    with tf.GradientTape() as tape:
-        predicted_q_values = model(np.array(states), training=True)
-        mse = tf.keras.losses.MeanSquaredError()
-        loss = mse(targets, predicted_q_values)
-
-    grads = tape.gradient(loss, model.trainable_variables)
-    model.optimizer.apply_gradients(zip(grads, model.trainable_variables))
-    return loss.numpy()
-
 def train_conv_step_batch(model, states, next_states, actions, rewards, dones):
-    
+    print (f'Starting batch training of length {len(states)}')
     one_hot_actions = np.array([get_one_hot_encoding(action) for action in actions])
 
     # Ensure the states are properly shaped as needed by the CNN

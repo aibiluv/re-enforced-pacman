@@ -5,7 +5,8 @@ import time
 import numpy as np
 from input_handler import InputHandler
 from ml.replay_buffer import ReplayBuffer
-from ml.train import create_model, train_conv_step, train_conv_step_batch, train_step, key_mapping, train_step_batch
+from ml.train import create_model, train_conv_step_batch, key_mapping
+from ml.training_executor import TrainingExecutor
 import pygame
 from pygame.locals import *
 from constants import *
@@ -24,11 +25,7 @@ import tf_keras.models as models
 from pynput.keyboard import Controller
 keyboard = Controller()
 # Create a lock object
-lock = threading.Lock()
 
-def run_training(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones):
-    with lock:
-        train_conv_step_batch(model, batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones)
 
 games_played = 0
 class GameController(object):
@@ -42,8 +39,9 @@ class GameController(object):
         self.fruit = None
         self.pause = Pause(True)
         self.level = 0
-        self.lives = 5
+        self.lives = 1
         self.score = 0
+        self.reward = 0
         self.textgroup = TextGroup()
         self.lifesprites = LifeSprites(self.lives)
         self.flashBG = False
@@ -52,6 +50,14 @@ class GameController(object):
         self.fruitCaptured = []
         self.fruitNode = None
         self.mazedata = MazeData()
+        self.batch_states = []
+        self.batch_next_states = []
+        self.batch_actions = []
+        self.batch_rewards = []
+        self.batch_dones = []
+        self.batch_size = 1000 
+        self.replay_buffer = ReplayBuffer(1000)
+
 
         
 
@@ -62,28 +68,14 @@ class GameController(object):
         self.ensure_directory_exists()
         self.last_save_time = time.time()  # Initialize the last save time
         self.save_interval = 5  # seconds between saves
-        self.ai = True
         self.train = True
-        self.run_once = True
-        self.defaultGrid = np.zeros((NROWS, NCOLS))  # Initialize matrix with zeros
-        if self.ai:
-            if (self.train):        
-                self.model = create_model(model_name='pac_man_human_trainer', create_new=False, input_size=(NROWS-5, NCOLS,7))
-            else:
-                self.model = models.load_model('pac_man_human_trainer')
-          
+        
+        self.defaultGrid = np.zeros((NROWS, NCOLS))  # Initialize matrix with zeros       
+        self.model = create_model(model_name='pac_man_human_trainer', create_new=False, input_size=(NROWS-5, NCOLS,7))
+        self.trainingExecutor= TrainingExecutor(self.model, 1)
         self.defaultGrid = np.zeros((NROWS, NCOLS))  # Initialize matrix with zeros
         self.generate_matrix_with_position(self.defaultGrid, self.mazesprites.wall_vector ,-1)
-        self.batch_states = []
-        self.batch_next_states = []
-        self.batch_actions = []
-        self.batch_rewards = []
-        self.batch_dones = []
-        self.batch_size = 1000 
-        self.replay_buffer = ReplayBuffer(1000)
 
-    def save_model(self):
-        self.model.save(self.model.name, overwrite=True)
     def setBackground(self):
         self.background_norm = pygame.surface.Surface(SCREENSIZE).convert()
         self.background_norm.fill(BLACK)
@@ -101,7 +93,8 @@ class GameController(object):
         self.nodes = NodeGroup(self.mazedata.obj.name+".txt")
         self.mazedata.obj.setPortalPairs(self.nodes)
         self.mazedata.obj.connectHomeNodes(self.nodes)
-        self.inputHandler = InputHandler()
+        self.ai = True
+        self.inputHandler = InputHandler(self.ai)
         self.pacman = Pacman(self.nodes.getNodeFromTiles(*self.mazedata.obj.pacmanStart), self.inputHandler)
         self.pellets = PelletGroup(self.mazedata.obj.name+".txt")
         self.ghosts = GhostGroup(self.nodes.getStartTempNode(), self.pacman)
@@ -205,6 +198,7 @@ class GameController(object):
             # Open the file in append mode, or create it if it does not exist
             with open(filename, 'ab') as f:
                 np.savetxt(f, matrix[:, :, i], fmt="%d")
+                f.write(b"\n")
 
  
     def release_all_keys(self):
@@ -213,7 +207,7 @@ class GameController(object):
             if key_info is not None:
                 keyboard.release(key_info[2]) 
 
-    def ai_action(self, state, eps=0.3):
+    def ai_action(self, state, eps=0.1):
 
         if np.random.rand() < eps:
             keys = list(key_mapping.keys())
@@ -221,8 +215,10 @@ class GameController(object):
             action_key = key_mapping[random_key]
         else:
             action_space = self.model.predict(np.array(state).reshape(1, *state.shape))
+            #print (f"action space: {action_space}")
             active_index = np.argmax(action_space)
             action_key = key_mapping[active_index]
+          
         
         self.release_all_keys()
         if action_key is not None: 
@@ -231,35 +227,27 @@ class GameController(object):
             
         else:
             # DO_NOTHING or handle it accordingly
-            print("No action required")
+            pass
+            #print("No action required")
     
     def update_training_params(self, current_state, next_state, done):
         action = self.inputHandler.get_pressed()  # Assuming this captures the action correctly
         
-        reward = self.score  # Use an appropriate method to calculate reward if needed
+
 
         self.batch_states.append(current_state)
         self.batch_next_states.append(next_state)
         self.batch_actions.append(action)
-        self.batch_rewards.append(reward)
+        self.batch_rewards.append(self.reward)
+        
         self.batch_dones.append(done)
-
-    def combine_batches(self, batch1, batch2):
-        states1, next_states1, actions1, rewards1, dones1 = batch1
-        states2, next_states2, actions2, rewards2, dones2 = batch2
-        
-        combined_states = states1 + states2
-        combined_next_states = next_states1 + next_states2
-        combined_actions = actions1 + actions2
-        combined_rewards = rewards1 + rewards2
-        combined_dones = dones1 + dones2
-        
-        return (combined_states, combined_next_states, combined_actions, combined_rewards, combined_dones)
+    def set_reward(self, r):
+        self.reward = r
 
     def update(self):
         
         dt = self.clock.tick(20) / 1000.0
-        done = np.array([self.pellets.isEmpty() or not self.pacman.alive])
+        
 
         current_state = self.get_state_for_conv()
         self.textgroup.update(dt)
@@ -271,25 +259,30 @@ class GameController(object):
             self.checkPelletEvents()
             self.checkGhostEvents()
             self.checkFruitEvents()
+
+        done = np.array([self.pellets.isEmpty() or not self.pacman.alive])   
         if self.pacman.alive:
             if not self.pause.paused:
-                self.pacman.update(dt, self.updateScore) 
-                next_state = self.get_state_for_conv()
-                if time.time() - self.last_save_time > self.save_interval:
-                    print("writing to file")
-                    self.save_channels(self.get_state_for_conv())
-                    self.last_save_time = time.time()  # Reset the timer
-                if (self.ai):
+                self.pacman.update(dt, self.set_reward) 
+                next_state = self.get_state_for_conv()               
+                if (self.train):
                     self.update_training_params(current_state, next_state, done)
-                    if len(self.batch_states) >= self.batch_size:
+                    self.reward = 0
+                    if len(self.batch_states) >= self.batch_size:                
+                        thread_batch = (
+                            list(self.batch_states),
+                            list(self.batch_next_states),
+                            list(self.batch_actions),
+                            list(self.batch_rewards),
+                            list(self.batch_dones)
+                        )
+                        self.replay_buffer.push(list(self.batch_states),
+                            list(self.batch_next_states),
+                            list(self.batch_actions),
+                            list(self.batch_rewards),
+                            list(self.batch_dones))
 
-                        thread_batch_states = list(self.batch_states)
-                        thread_batch_next_states = list(self.batch_next_states)
-                        thread_batch_actions = list(self.batch_actions)
-                        thread_batch_rewards = list(self.batch_rewards)
-                        thread_batch_dones = list(self.batch_dones)
-                        self.replay_buffer.push(list(self.batch_states),list(self.batch_next_states), list(self.batch_actions), list(self.batch_rewards), list(self.batch_dones))
-                        
+                        # Clear the main batch    
                         self.batch_states = []
                         self.batch_next_states = []
                         self.batch_actions = []
@@ -297,23 +290,34 @@ class GameController(object):
                         self.batch_dones = []
 
                             # Clear the main batch    
-                        training_thread = threading.Thread(target=run_training, args=(self.model, thread_batch_states, thread_batch_next_states, thread_batch_actions, thread_batch_rewards, thread_batch_dones))
-                        training_thread.start()
-                        
+                        self.trainingExecutor.submit(thread_batch, replay_batch=False)
+        
                         sampled_batch = self.replay_buffer.sample()
-                        
-                        training_thread = threading.Thread(target=run_training, args=(self.model, *sampled_batch))
-                        training_thread.start()
+        
+                        # Submit the replay training task to the executor
+                        self.trainingExecutor.submit(sampled_batch, replay_batch=True)
 
+                        sampled_batch_2 = self.replay_buffer.sample()
+        
+                        # Submit the replay training task to the executor
+                        self.trainingExecutor.submit(sampled_batch_2, replay_batch=True)
+
+                        sampled_batch_3 = self.replay_buffer.sample()
+        
+                        # Submit the replay training task to the executor
+                        self.trainingExecutor.submit(sampled_batch_3, replay_batch=True)
+
+                if self.ai:
                     self.ai_action(next_state)
                     
 
         else:
             self.pacman.update(dt)
             next_state = self.get_state_for_conv()
-            if(self.run_once and self.ai):
+            if(self.train):
                 self.update_training_params(current_state, next_state, done)
-                self.run_once = False
+                self.reward = 0
+                
             
         
         if self.flashBG:
@@ -338,8 +342,16 @@ class GameController(object):
                 if self.train:
                     #flushing batch
                     if(len(self.batch_states)>0):
-                        run_training(self.model, self.batch_states, self.batch_next_states, self.batch_actions, self.batch_rewards, self.batch_dones)
-                    self.save_model()
+                        thread_batch = (
+                            list(self.batch_states),
+                            list(self.batch_next_states),
+                            list(self.batch_actions),
+                            list(self.batch_rewards),
+                            list(self.batch_dones)
+                        )
+
+                        self.trainingExecutor.submit(thread_batch, replay_batch=False)
+                    self.trainingExecutor.shutdown()
                 exit()
             elif event.type == KEYDOWN:
                 if event.key == K_SPACE:
@@ -357,6 +369,7 @@ class GameController(object):
         if pellet:
             self.pellets.numEaten += 1
             self.updateScore(pellet.points)
+            self.reward = pellet.points
             if self.pellets.numEaten == 30:
                 self.ghosts.inky.startNode.allowAccess(RIGHT, self.ghosts.inky)
             if self.pellets.numEaten == 70:
@@ -396,7 +409,8 @@ class GameController(object):
                 if ghost.mode.current is FREIGHT:
                     self.pacman.visible = False
                     ghost.visible = False
-                    self.updateScore(ghost.points)                  
+                    self.updateScore(ghost.points)   
+                    self.reward = ghost.points              
                     self.textgroup.addText(str(ghost.points), WHITE, ghost.position.x, ghost.position.y, 8, time=1)
                     self.ghosts.updatePoints()
                     self.pause.setPause(pauseTime=1, func=self.showEntities)
@@ -406,7 +420,7 @@ class GameController(object):
                     if self.pacman.alive:
                         self.lives -=  1
                         self.updateScore(-100)
-                        
+                        self.reward = -100
                         self.lifesprites.removeImage()
                         self.pacman.die()               
                         self.ghosts.hide()
@@ -459,7 +473,7 @@ class GameController(object):
         self.textgroup.updateLevel(self.level)
 
     def restartGame(self):
-        self.lives = 5
+        self.lives = 1
         self.level = 0
         self.pause.paused = True
         self.fruit = None

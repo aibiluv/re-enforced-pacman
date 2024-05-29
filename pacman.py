@@ -29,7 +29,7 @@ class Pacman(Entity):
         self.direction = STOP
 
 
-    def update(self, dt, updatescore = None):	
+    def update(self, dt, set_reward = None):	
         self.sprites.update(dt)
         self.position += self.directions[self.direction]*self.speed*dt
         direction = self.getValidKey()
@@ -45,8 +45,8 @@ class Pacman(Entity):
                 self.target = self.getNewTarget(self.direction)
 
             if self.target is self.node:
-                if updatescore:
-                    updatescore(-2)
+                if set_reward:
+                    set_reward(-2)
                 self.direction = STOP
             self.setPosition()
         else: 
@@ -54,25 +54,31 @@ class Pacman(Entity):
                 self.reverseDirection()
 
     def getValidKey(self):
-        if self.inputHandler:
-            if self.inputHandler.get_key(K_UP):
-                return UP
-            if self.inputHandler.get_key(K_DOWN):
-                return DOWN
-            if self.inputHandler.get_key(K_LEFT):
-                return LEFT
-            if self.inputHandler.get_key(K_RIGHT):
-                return RIGHT                  
-        else:
-            key_pressed = pygame.key.get_pressed()
-            if key_pressed[K_UP]:
-                return UP
-            if key_pressed[K_DOWN]:
-                return DOWN
-            if key_pressed[K_LEFT]:
-                return LEFT
-            if key_pressed[K_RIGHT]:
-                return RIGHT
+        # if self.inputHandler:
+        #     if self.inputHandler.get_key(K_UP):
+        #         return UP
+        #     if self.inputHandler.get_key(K_DOWN):
+        #         return DOWN
+        #     if self.inputHandler.get_key(K_LEFT):
+        #         return LEFT
+        #     if self.inputHandler.get_key(K_RIGHT):
+        #         return RIGHT                  
+        # else:
+        # key_pressed = pygame.key.get_pressed()
+        key_pressed = self.inputHandler.get_pressed()
+        
+        if key_pressed[K_UP]:
+            
+            return UP
+        if key_pressed[K_DOWN]:
+            
+            return DOWN
+        if key_pressed[K_LEFT]:
+            
+            return LEFT
+        if key_pressed[K_RIGHT]:
+            
+            return RIGHT
         return STOP  
 
     def eatPellets(self, pelletList):
